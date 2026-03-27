@@ -1,0 +1,96 @@
+# ============================================================
+# Outbound Engine — Docker Compose
+#
+# Completely isolated from the main Foundry app.
+# Own PostgreSQL instance. Own network.
+# No shared volumes or networks with foundry_net.
+#
+# Usage:
+#   Start:   docker compose up -d
+#   Stop:    docker compose down
+#   Logs:    docker compose logs -f scraper
+#   Shell:   docker compose exec scraper bash
+#   DB:      docker compose exec db psql -U outbound -d outbound
+#
+# Port convention (separate block from main app):
+#   4900 → NOT exposed (scraper has no HTTP server)
+#   4901 → outbound_db (postgres, loopback only, for local debugging)
+# ============================================================
+
+services:
+
+  # ----------------------------------------------------------
+  # Scraper — Alpine Python container
+  # Runs on a schedule via cron inside the container.
+  # ----------------------------------------------------------
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: outbound_scraper
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql://${OUTBOUND_DB_USER:-outbound}:${OUTBOUND_DB_PASSWORD:-outbound_secret}@db:5432/${OUTBOUND_DB_NAME:-outbound}"
+      # Run mode: "cron" (scheduled) or "once" (single run, for testing)
+      RUN_MODE: ${RUN_MODE:-cron}
+      # Comma-separated list of target categories to scrape
+      # Options: real_estate, restaurants, transport
+      TARGETS: ${TARGETS:-real_estate,restaurants,transport}
+      # Country/region scope
+      REGION: ${REGION:-Portugal}
+      # Max results per query (Google Maps caps at ~120 organically)
+      MAX_RESULTS: ${MAX_RESULTS:-100}
+      # Seconds to wait between requests (be polite, avoid rate limits)
+      REQUEST_DELAY: ${REQUEST_DELAY:-3}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - outbound_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ----------------------------------------------------------
+  # Database — Dedicated PostgreSQL for outbound leads
+  # Separate from the main app DB. Survives scraper restarts.
+  # ----------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: outbound_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${OUTBOUND_DB_USER:-outbound}
+      POSTGRES_PASSWORD: ${OUTBOUND_DB_PASSWORD:-outbound_secret}
+      POSTGRES_DB: ${OUTBOUND_DB_NAME:-outbound}
+    volumes:
+      - outbound_postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${OUTBOUND_DB_USER:-outbound} -d ${OUTBOUND_DB_NAME:-outbound}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - outbound_net
+    # Loopback-only for local debugging (psql from host).
+    # Safe to comment out in production — nothing outside this
+    # compose stack needs direct DB access.
+    ports:
+      - "127.0.0.1:4901:5432"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  outbound_postgres_data:
+    driver: local
+
+networks:
+  outbound_net:
+    driver: bridge

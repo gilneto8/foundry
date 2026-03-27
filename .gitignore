@@ -44,3 +44,7 @@ next-env.d.ts
 # docs
 /docs
 /src/generated/prisma
+
+# snapshots — keep the directory, not the dumps
+/snapshots/*.tar.gz
+
