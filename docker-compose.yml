@@ -5,7 +5,8 @@
 #   Start:   docker compose up -d
 #   Stop:    docker compose down
 #   Logs:    docker compose logs -f app
-#   Migrate: docker compose exec app npx prisma migrate deploy
+#   Logs:    docker compose logs -f worker
+#   Migrate: DATABASE_URL=... npx prisma migrate deploy  (from host)
 #
 # For production on the Hetzner VPS, override values via:
 #   docker compose -f compose.yml -f compose.prod.yml up -d
@@ -25,12 +26,32 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Inside Docker, the DB is reachable via the service name "db", not "localhost"
       DATABASE_URL: "postgresql://${POSTGRES_USER:-foundry}:${POSTGRES_PASSWORD:-foundry_secret}@db:5432/${POSTGRES_DB:-foundry}?schema=public"
       SESSION_SECRET: ${SESSION_SECRET}
+      REDIS_URL: "redis://redis:6379"
       NODE_ENV: production
     depends_on:
       db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - foundry_net
+
+  # ----------------------------------------------------------
+  # Worker — BullMQ background job processor
+  # ----------------------------------------------------------
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: foundry_worker
+    restart: unless-stopped
+    environment:
+      REDIS_URL: "redis://redis:6379"
+      NODE_ENV: production
+    depends_on:
+      redis:
         condition: service_healthy
     networks:
       - foundry_net
@@ -55,13 +76,36 @@ services:
       retries: 5
     networks:
       - foundry_net
-    # Do NOT expose port 5432 to host in production.
+    # Do NOT expose port 6379 to host in production.
     # For local development, uncomment:
     ports:
       - "5432:5432"
 
+  # ----------------------------------------------------------
+  # Redis 7 — Job queue broker for BullMQ
+  # ----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: foundry_redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - foundry_net
+    # Redis not exposed to host. For local dev, uncomment:
+    # ports:
+    #   - "6379:6379"
+
 volumes:
   postgres_data:
+    driver: local
+  redis_data:
     driver: local
 
 networks:
