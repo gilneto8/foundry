@@ -1,0 +1,119 @@
+# ============================================================
+# Foundry — Nginx Reverse Proxy Template
+# deploy/nginx/foundry.conf.template
+#
+# HOW TO USE:
+#   See deploy/nginx/README.md for step-by-step instructions.
+#
+# PLACEHOLDERS (replace all before deploying):
+#   {{APP_DOMAIN}}   → e.g. invoicer.yourdomain.com
+#   {{APP_PORT}}     → host port from docker-compose.yml
+# ============================================================
+
+
+# ---------------------------------------------------------------------------
+# Step 1: HTTP — redirect all traffic to HTTPS
+# Certbot's --nginx flag will create this block automatically if you start
+# with HTTPS only. Keep it here explicitly for clarity and control.
+# ---------------------------------------------------------------------------
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{APP_DOMAIN}};
+
+    # ACME challenge passthrough (used by Certbot for cert renewal)
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    # Redirect everything else to HTTPS — permanent, cached by browsers
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Step 2: HTTPS — main server block
+# SSL certificate paths are managed by Certbot.
+# Run: sudo certbot --nginx -d {{APP_DOMAIN}}
+# Certbot will fill in the ssl_certificate paths below automatically.
+# ---------------------------------------------------------------------------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    server_name {{APP_DOMAIN}};
+
+    # ----------------------------------------------------------------
+    # SSL — managed by Certbot. Do NOT edit these paths manually.
+    # ----------------------------------------------------------------
+    ssl_certificate /etc/letsencrypt/live/{{APP_DOMAIN}}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{APP_DOMAIN}}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # ----------------------------------------------------------------
+    # Security headers — applied to all responses
+    # ----------------------------------------------------------------
+    add_header X-Frame-Options           "SAMEORIGIN"                               always;
+    add_header X-Content-Type-Options    "nosniff"                                  always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin"          always;
+    add_header X-XSS-Protection          "1; mode=block"                            always;
+    add_header Permissions-Policy        "camera=(), microphone=(), geolocation=()" always;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains"      always;
+
+    # ----------------------------------------------------------------
+    # Next.js static assets — served with long-lived cache headers.
+    # The content hash in the filename guarantees safe caching.
+    # ----------------------------------------------------------------
+    location /_next/static/ {
+        proxy_pass http://127.0.0.1:{{APP_PORT}};
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ----------------------------------------------------------------
+    # Public static files (favicon, og-image.png, robots.txt, etc.)
+    # ----------------------------------------------------------------
+    location /public/ {
+        proxy_pass http://127.0.0.1:{{APP_PORT}};
+        add_header Cache-Control "public, max-age=86400";
+    }
+
+    # ----------------------------------------------------------------
+    # Everything else — proxied to the Next.js standalone server
+    # ----------------------------------------------------------------
+    location / {
+        proxy_pass http://127.0.0.1:{{APP_PORT}};
+
+        # Required for WebSocket (Next.js HMR in dev, WebSocket routes in prod)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        # Pass real client info to Next.js
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        # Disable Nginx buffering for streaming responses (SSE, chunked transfer)
+        proxy_buffering    off;
+        proxy_cache_bypass $http_upgrade;
+
+        # Timeout for long-polling / Server-Sent Events routes
+        # Default is 60s — increase for apps that use streaming APIs
+        proxy_read_timeout    900s;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    900s;
+
+        # Max request body size (Next.js Server Actions, file uploads)
+        # Override per-product if you need larger uploads
+        client_max_body_size 10m;
+    }
+}

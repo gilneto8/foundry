@@ -24,7 +24,14 @@ services:
     container_name: foundry_app
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # ⚠️  VERIFY THIS before deploying a new product on the shared VPS.
+      # Port 3000 might already be allocated elsewhere.
+      # Format: "127.0.0.1:HOST_PORT:3000"
+      # 127.0.0.1 = loopback only — Nginx needs it, the internet does not.
+      # Convention: 4001/4002 = Alerta-AT block. Use 4100+ for new Foundry products.
+      - "127.0.0.1:4100:3000"
+
+
     environment:
       DATABASE_URL: "postgresql://${POSTGRES_USER:-foundry}:${POSTGRES_PASSWORD:-foundry_secret}@db:5432/${POSTGRES_DB:-foundry}?schema=public"
       SESSION_SECRET: ${SESSION_SECRET}
@@ -37,8 +44,8 @@ services:
     logging:
       driver: "json-file"
       options:
-        max-size: "10m"   # Rotate after 10MB
-        max-file: "5"     # Keep last 5 rotated file
+        max-size: "10m" # Rotate after 10MB
+        max-file: "5" # Keep last 5 rotated file
     depends_on:
       db:
         condition: service_healthy

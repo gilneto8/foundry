@@ -409,7 +409,7 @@ const PROTECTED_PATHS = ["/dashboard", "/projects", "/settings"];
 
 ---
 
-### Step 6 — Configure SEO & AI Metadata
+### Step 7 — Configure SEO & AI Metadata
 
 All metadata lives in `src/app/layout.tsx`. Update these fields for your product before launch:
 
@@ -443,7 +443,41 @@ Also update:
 
 ---
 
-### Step 7 — Environment Variables Checklist
+### Step 8 — Expose on the VPS via Nginx
+
+The boilerplate ships with a production-ready Nginx config template and deployment guide in `deploy/nginx/`.
+
+> **⚠️ Port collision warning:** Port `3000` might be taken by another app. Search for free ports using `docker ps` and `lsof -i :<port>` for new Foundry products. The `docker-compose.yml` should default to a free port, e.g. `127.0.0.1:4003:3000` — change the host port per product before deploying.
+
+**TL;DR:**
+
+```bash
+# 1. Copy the template
+sudo cp deploy/nginx/foundry.conf.template /etc/nginx/sites-available/YOUR_PRODUCT.conf
+
+# 2. Replace the two placeholders in the file:
+#    {{APP_DOMAIN}} → your-product.com (4 occurrences)
+#    {{APP_PORT}}   → host port from docker-compose.yml, e.g. 4003 (3 occurrences)
+sudo nano /etc/nginx/sites-available/YOUR_PRODUCT.conf
+
+# 3. Test — NEVER skip this
+sudo nginx -t
+
+# 4. Enable
+sudo ln -s /etc/nginx/sites-available/YOUR_PRODUCT.conf /etc/nginx/sites-enabled/
+
+# 5. Reload (not restart — live sites stay up)
+sudo systemctl reload nginx
+
+# 6. SSL
+sudo certbot --nginx -d your-product.com
+```
+
+> See [`deploy/nginx/README.md`](deploy/nginx/README.md) for the full procedure including the port registry, rollback steps, Certbot `--expand` usage, and the common mistakes table.
+
+---
+
+### Step 9 — Environment Variables Checklist
 
 Before deploying to production, ensure these are set:
 
@@ -476,6 +510,8 @@ Before deploying to production, ensure these are set:
 | `worker/src/workers/pdf.worker.ts` | PDF generation worker — `concurrency: 1`, uses Playwright adapter |
 | `worker/src/adapters/playwright.ts` | Pluggable headless Chromium adapter — `generatePdf()`, `takeScreenshot()`, `withPage()` |
 | `worker/src/queues.ts` | Canonical queue name registry (worker side — must mirror `src/lib/queue.ts`) |
+| `deploy/nginx/foundry.conf.template` | Nginx config template — copy, replace `{{APP_DOMAIN}}` + `{{APP_PORT}}`, enable via symlink |
+| `deploy/nginx/README.md` | Full Nginx deployment guide — port registry, Certbot, rollback |
 | `docs/foundry-action-plan.md` | Full implementation status and architecture decisions |
 
 
