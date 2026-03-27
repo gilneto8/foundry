@@ -1,6 +1,6 @@
 # Nginx Deployment Guide
 
-> This is the **canonical, step-by-step procedure** for exposing a new Foundry-based product on the Hetzner VPS via Nginx. Follow it exactly — live sites (`alerta-at.pt`, `kelaro.io`, `gil-neto.com`) are on the same Nginx instance. One wrong `nginx -t` skip and you take them all down.
+> This is the **canonical, step-by-step procedure** for exposing a new Foundry-based product on the VPS via Nginx. Follow it exactly — other live sites may be on the same Nginx instance. One wrong `nginx -t` skip and you take them all down.
 
 ---
 

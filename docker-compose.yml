@@ -24,11 +24,11 @@ services:
     container_name: foundry_app
     restart: unless-stopped
     ports:
-      # ⚠️  VERIFY THIS before deploying a new product on the shared VPS.
-      # Port 3000 might already be allocated elsewhere.
+      # ⚠️  VERIFY THIS before deploying on a shared VPS.
+      # Other apps may already occupy ports. Check with: docker ps && lsof -i :4100
       # Format: "127.0.0.1:HOST_PORT:3000"
       # 127.0.0.1 = loopback only — Nginx needs it, the internet does not.
-      # Convention: 4001/4002 = Alerta-AT block. Use 4100+ for new Foundry products.
+      # Recommended: group all ports for one product in the same block (e.g. 4100, 4101, 4102...)
       - "127.0.0.1:4100:3000"
 
 
