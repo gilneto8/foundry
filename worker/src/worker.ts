@@ -14,6 +14,7 @@
 // ============================================================
 
 import "dotenv/config";
+import { logger } from "./logger";
 import { getRedisConnection } from "./connection";
 import { QUEUES } from "./queues";
 
@@ -29,8 +30,9 @@ const workers = [
   createPdfWorker(connection),
 ];
 
-console.log(
-  `[worker] 🚀 Foundry Worker started. Listening on queues: ${Object.values(QUEUES).join(", ")}`
+logger.info(
+  { queues: Object.values(QUEUES) },
+  "🚀 Foundry Worker started"
 );
 
 // ---------------------------------------------------------------------------
@@ -38,7 +40,7 @@ console.log(
 // This gives in-flight jobs time to finish before the container exits.
 // ---------------------------------------------------------------------------
 async function shutdown() {
-  console.log("[worker] Shutting down gracefully...");
+  logger.info("Shutting down gracefully...");
 
   // Close all BullMQ workers (stops picking up new jobs)
   await Promise.all(workers.map((w) => w.close()));
@@ -46,9 +48,11 @@ async function shutdown() {
   // Close the Playwright browser if it was used
   await closeBrowser();
 
+  logger.info("Worker shutdown complete");
   process.exit(0);
 }
 
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
+
 

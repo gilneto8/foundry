@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { decrypt } from "@/lib/session";
 import { cookies } from "next/headers";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ module: "proxy" });
 
 // ---------------------------------------------------------------------------
 // Route Configuration
@@ -21,11 +24,13 @@ export default async function proxy(req: NextRequest) {
 
   // Unauthenticated user hitting a protected route → redirect to login
   if (isProtectedRoute && !session?.userId) {
+    log.warn({ path }, "Unauthenticated access to protected route — redirecting to /login");
     return NextResponse.redirect(new URL("/login", req.nextUrl));
   }
 
   // Authenticated user hitting a public auth route → redirect to dashboard
   if (isPublicRoute && session?.userId && path !== "/") {
+    log.debug({ path, userId: session.userId }, "Authenticated user on public route — redirecting to /dashboard");
     return NextResponse.redirect(new URL("/dashboard", req.nextUrl));
   }
 
@@ -36,3 +41,5 @@ export default async function proxy(req: NextRequest) {
 export const config = {
   matcher: ["/((?!api|_next/static|_next/image|favicon.ico|.*\\.png$).*)"],
 };
+
+

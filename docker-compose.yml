@@ -30,6 +30,15 @@ services:
       SESSION_SECRET: ${SESSION_SECRET}
       REDIS_URL: "redis://redis:6379"
       NODE_ENV: production
+    # Task 3.2.1 — Explicit json-file driver.
+    # Promtail's docker_sd_configs reads /var/lib/docker/containers/<id>/*-json.log
+    # Docker defaults to json-file anyway, but this makes it explicit and adds
+    # rotation so logs don't exhaust disk on long-running VPS deployments.
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"   # Rotate after 10MB
+        max-file: "5"     # Keep last 5 rotated file
     depends_on:
       db:
         condition: service_healthy
@@ -50,6 +59,13 @@ services:
     environment:
       REDIS_URL: "redis://redis:6379"
       NODE_ENV: production
+    # Same json-file logging as the app — Promtail picks this up automatically.
+    # Container name foundry_worker → Loki label {app="foundry_worker"}.
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
     depends_on:
       redis:
         condition: service_healthy

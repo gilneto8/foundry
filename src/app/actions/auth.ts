@@ -4,11 +4,15 @@ import { redirect } from "next/navigation";
 import argon2 from "argon2";
 import { db } from "@/lib/db";
 import { createSession, deleteSession } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import {
   SignupSchema,
   LoginSchema,
   AuthFormState,
 } from "@/lib/definitions";
+
+const log = logger.child({ module: "auth" });
+
 
 // ---------------------------------------------------------------------------
 // SIGN UP
@@ -33,6 +37,7 @@ export async function signup(
   // 2. Check for duplicate email
   const existing = await db.user.findUnique({ where: { email } });
   if (existing) {
+    log.warn({ email }, "Signup blocked — email already exists");
     return { message: "An account with this email already exists." };
   }
 
@@ -43,6 +48,7 @@ export async function signup(
   });
 
   // 4. Create session and redirect
+  log.info({ userId: user.id, email }, "New user signed up");
   await createSession(user.id, user.role);
   redirect("/dashboard");
 }
@@ -69,16 +75,19 @@ export async function login(
   // 2. Find user
   const user = await db.user.findUnique({ where: { email } });
   if (!user || !user.passwordHash) {
+    log.warn({ email }, "Login failed — unknown email");
     return { message: "Invalid email or password." };
   }
 
   // 3. Verify password
   const isValid = await argon2.verify(user.passwordHash, password);
   if (!isValid) {
+    log.warn({ email, userId: user.id }, "Login failed — wrong password");
     return { message: "Invalid email or password." };
   }
 
   // 4. Create session and redirect
+  log.info({ userId: user.id, email }, "User logged in");
   await createSession(user.id, user.role);
   redirect("/dashboard");
 }
@@ -87,6 +96,7 @@ export async function login(
 // LOGOUT
 // ---------------------------------------------------------------------------
 export async function logout(): Promise<void> {
+  log.info("User logged out");
   await deleteSession();
   redirect("/login");
 }

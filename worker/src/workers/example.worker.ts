@@ -9,13 +9,15 @@
 import { Worker, type Job } from "bullmq";
 import type { ConnectionOptions } from "bullmq";
 import { QUEUES } from "../queues";
+import { logger } from "../logger";
+
+const log = logger.child({ module: "example" });
 
 export function createExampleWorker(connection: ConnectionOptions) {
   const worker = new Worker(
     QUEUES.EXAMPLE,
     async (job: Job) => {
-      console.log(`[example] Processing job ${job.id}`);
-      console.log(`[example] Payload:`, job.data);
+      log.info({ jobId: job.id }, "Processing job");
 
       // Simulate async work — replace with real logic
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -28,9 +30,9 @@ export function createExampleWorker(connection: ConnectionOptions) {
     }
   );
 
-  worker.on("completed", (job) => console.log(`[example] ✓ ${job.id}`));
+  worker.on("completed", (job) => log.info({ jobId: job.id }, "Job completed"));
   worker.on("failed", (job, err) =>
-    console.error(`[example] ✗ ${job?.id} — ${err.message}`)
+    log.error({ jobId: job?.id, err }, "Job failed")
   );
 
   return worker;

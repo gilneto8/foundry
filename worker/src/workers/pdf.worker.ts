@@ -29,6 +29,9 @@ import { Worker, type Job } from "bullmq";
 import type { ConnectionOptions } from "bullmq";
 import { QUEUES } from "../queues";
 import { generatePdf, closeBrowser, type PdfOptions } from "../adapters/playwright";
+import { logger } from "../logger";
+
+const log = logger.child({ module: "pdf" });
 
 // ---------------------------------------------------------------------------
 // Typed job payload — what callers must provide when enqueuing
@@ -63,12 +66,12 @@ export function createPdfWorker(connection: ConnectionOptions) {
     async (job: Job<PdfJobData, PdfJobResult>) => {
       const { url, options, metadata } = job.data;
 
-      console.log(`[pdf] Job ${job.id} — rendering: ${url}`);
+      log.info({ jobId: job.id, url }, "Rendering PDF");
 
       // Plug in the adapter — pure function, zero BullMQ knowledge
       const pdfBuffer = await generatePdf(url, options);
 
-      console.log(`[pdf] Job ${job.id} — done (${pdfBuffer.byteLength} bytes)`);
+      log.info({ jobId: job.id, bytes: pdfBuffer.byteLength, url }, "PDF rendered");
 
       return {
         pdf: pdfBuffer.toString("base64"),
@@ -92,11 +95,11 @@ export function createPdfWorker(connection: ConnectionOptions) {
   );
 
   worker.on("completed", (job, result) =>
-    console.log(`[pdf] ✓ ${job.id} — ${result.size} bytes`)
+    log.info({ jobId: job.id, bytes: result.size }, "PDF job completed")
   );
 
   worker.on("failed", (job, err) =>
-    console.error(`[pdf] ✗ ${job?.id} — ${err.message}`)
+    log.error({ jobId: job?.id, err }, "PDF job failed")
   );
 
   return worker;

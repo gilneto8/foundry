@@ -1,11 +1,16 @@
 import { AppShell } from "@/components/layout";
 import { Button } from "@/components/ui/button";
+import { logger } from "@/lib/logger";
 
 /**
  * Foundry Boilerplate — Default home page.
  * Replace this with your app's actual entry point.
  */
 export default function Page() {
+
+  const log = logger.child({ module: "homepage" });
+  log.info(`[TRAFFIC] Landing page loaded at ${new Date().toISOString()}`);
+
   return (
     <AppShell appName="Foundry">
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center gap-6">

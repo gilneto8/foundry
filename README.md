@@ -14,7 +14,10 @@ A high-performance SaaS manufacturing line for a single Hetzner VPS. Optimized f
 | Password Hashing | Argon2 |
 | Session Management | Stateless JWT via `jose` (HttpOnly cookies) |
 | Background Jobs | BullMQ + Redis 7 |
-| Containers | Docker — multi-stage Alpine build |
+| PDF Generation | Playwright (headless Chromium, pluggable adapter) |
+| Logging | Pino — structured JSON to stdout, `pino-pretty` in dev |
+| Observability | Docker json-file driver → Promtail `docker_sd_configs` → Loki → Grafana |
+| Containers | Docker — multi-stage build (Alpine for app, Debian slim for worker) |
 | Language | TypeScript 5 (strict) |
 
 ---
@@ -311,7 +314,76 @@ The adapter also exposes:
 
 ---
 
-### Step 5 — Add New Pages and Routes
+### Step 5 — Logging & Observability
+
+The boilerplate ships with structured logging wired end-to-end. In production, every log line is a JSON object that flows into your Grafana/Loki stack automatically via Promtail.
+
+#### How it works
+
+```
+stdout (JSON)
+  └── Docker json-file driver — writes /var/lib/docker/containers/<id>/*-json.log
+        └── Promtail docker_sd_configs — autodiscovers containers, maps name → {app} label
+              └── Loki — indexes logs
+                    └── Grafana — query with {app="foundry_app"} or {app="foundry_worker"}
+```
+
+**No Promtail config changes needed.** The existing `__meta_docker_container_name` relabel rule already maps:
+- `foundry_app` → `{app="foundry_app"}`
+- `foundry_worker` → `{app="foundry_worker"}`
+
+#### The logger
+
+Two singletons, same design:
+- `src/lib/logger.ts` — Next.js app (`server-only`, safe in Server Actions and middleware)
+- `worker/src/logger.ts` — Worker process
+
+```ts
+import { logger } from "@/lib/logger"; // or "./logger" in the worker
+
+// Scoped child logger for a module
+const log = logger.child({ module: "payments" });
+
+// Structured log — fields are queryable in Loki
+log.info({ userId, invoiceId, amount }, "Invoice generated");
+log.warn({ userId, path }, "Rate limit approaching");
+log.error({ err, jobId }, "PDF generation failed");
+```
+
+Log levels: `trace` → `debug` → `info` → `warn` → `error` → `fatal`.
+Default: `debug` in dev, `info` in production. Override with `LOG_LEVEL` env var.
+
+#### What's already instrumented
+
+| Module | Events logged |
+|---|---|
+| `src/proxy.ts` | Unauthenticated access to protected route, authenticated redirect |
+| `src/app/actions/auth.ts` | Signup (success + duplicate email), login (success + wrong password + unknown email), logout |
+| `worker/src/worker.ts` | Startup (with queue list), graceful shutdown |
+| `worker/src/workers/pdf.worker.ts` | Job start (jobId + URL), PDF render complete (jobId + bytes), failures |
+| `worker/src/workers/example.worker.ts` | Job start, completion, failures |
+
+#### Sensitive field redaction
+
+Pino's `redact` option is configured to **automatically censor** these fields before they reach stdout:
+`password`, `passwordHash`, `token`, `secret`, `cookie`.
+
+Add more paths in `src/lib/logger.ts` if your product handles PII.
+
+#### When you add a new worker
+
+```ts
+// worker/src/workers/my-thing.worker.ts
+import { logger } from "../logger";
+const log = logger.child({ module: "my-thing" });
+
+// Inside the worker handler:
+log.info({ jobId: job.id, ...relevantFields }, "Processing job");
+```
+
+---
+
+### Step 6 — Add New Pages and Routes
 
 Pages go in `src/app/`. The App Router convention applies:
 
@@ -391,12 +463,14 @@ Before deploying to production, ensure these are set:
 | `src/lib/db.ts` | Lazy Prisma singleton — safe at build time |
 | `src/lib/session.ts` | JWT create/verify, session cookie management |
 | `src/lib/queue.ts` | `enqueue()` — push jobs to Redis from the Next.js app |
+| `src/lib/logger.ts` | Pino logger for the Next.js app (`server-only`) |
 | `src/proxy.ts` | Route protection middleware (Next.js 16: `proxy.ts`, not `middleware.ts`) |
 | `src/app/actions/auth.ts` | Signup, Login, Logout Server Actions |
 | `src/app/layout.tsx` | Root metadata — SEO, OpenGraph, Twitter cards |
 | `src/app/robots.ts` | Robots.txt — crawler access control |
 | `src/app/sitemap.ts` | Dynamic XML sitemap |
 | `prisma/schema.prisma` | Database models |
+| `worker/src/logger.ts` | Pino logger for the worker process |
 | `worker/src/worker.ts` | Slim orchestrator — boots all workers, handles graceful shutdown |
 | `worker/src/workers/example.worker.ts` | Placeholder worker — delete and replace with real domain workers |
 | `worker/src/workers/pdf.worker.ts` | PDF generation worker — `concurrency: 1`, uses Playwright adapter |
