@@ -1,60 +1,54 @@
 // ============================================================
 // worker/src/worker.ts
-// BullMQ Worker — background job processor for the Foundry.
+// Foundry Worker — main entry point.
 //
-// To add a new job type:
-//  1. Add the queue name to worker/src/queues.ts
-//  2. Add a new Worker instance below, pointing at that queue
-//  3. Add the corresponding Queue + enqueue helper in src/lib/queue.ts
+// This file is intentionally thin. Each worker type lives in
+// its own file under worker/src/workers/. Add a new job type
+// by creating a new file there and importing it here.
+//
+// To add a new worker:
+//  1. Create worker/src/workers/my-thing.worker.ts
+//     that exports createMyThingWorker(connection)
+//  2. Add the queue name to worker/src/queues.ts
+//  3. Import and register it below (boot + shutdown)
 // ============================================================
 
 import "dotenv/config";
-import { Worker, type Job } from "bullmq";
 import { getRedisConnection } from "./connection";
 import { QUEUES } from "./queues";
 
+// Workers
+import { createExampleWorker } from "./workers/example.worker";
+import { createPdfWorker, closeBrowser } from "./workers/pdf.worker";
+
 const connection = getRedisConnection();
 
-// ------------------------------------------------------------------
-// Example Worker
-// Replace "example" logic with real domain processing.
-// ------------------------------------------------------------------
-const exampleWorker = new Worker(
-  QUEUES.EXAMPLE,
-  async (job: Job) => {
-    console.log(`[worker] Processing job ${job.id} from queue "${QUEUES.EXAMPLE}"`);
-    console.log(`[worker] Payload:`, job.data);
-
-    // Simulate async work (replace with real logic: PDF gen, email, etc.)
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    console.log(`[worker] Job ${job.id} completed.`);
-    return { success: true };
-  },
-  {
-    connection,
-    concurrency: 5, // Max 5 concurrent jobs — tune per VPS RAM budget
-  }
-);
-
-exampleWorker.on("completed", (job) => {
-  console.log(`[worker] ✓ ${job.id} completed`);
-});
-
-exampleWorker.on("failed", (job, err) => {
-  console.error(`[worker] ✗ ${job?.id} failed:`, err.message);
-});
+// Boot all workers
+const workers = [
+  createExampleWorker(connection),
+  createPdfWorker(connection),
+];
 
 console.log(
   `[worker] 🚀 Foundry Worker started. Listening on queues: ${Object.values(QUEUES).join(", ")}`
 );
 
-// Graceful shutdown
+// ---------------------------------------------------------------------------
+// Graceful shutdown — closes all workers cleanly on SIGTERM/SIGINT.
+// This gives in-flight jobs time to finish before the container exits.
+// ---------------------------------------------------------------------------
 async function shutdown() {
   console.log("[worker] Shutting down gracefully...");
-  await exampleWorker.close();
+
+  // Close all BullMQ workers (stops picking up new jobs)
+  await Promise.all(workers.map((w) => w.close()));
+
+  // Close the Playwright browser if it was used
+  await closeBrowser();
+
   process.exit(0);
 }
 
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
+

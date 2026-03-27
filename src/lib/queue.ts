@@ -17,6 +17,8 @@ import { Queue, type ConnectionOptions } from "bullmq";
 // ---------------------------------------------------------------------------
 export const QUEUES = {
   EXAMPLE: "example",
+  /** PDF generation — enqueue from a Server Action, processed by the Playwright adapter in the worker */
+  PDF_GENERATE: "pdf_generate",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

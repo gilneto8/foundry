@@ -139,25 +139,115 @@ Auth is fully implemented. Users register via `/signup`, log in via `/login`, an
 
 ### Step 4 — Add Background Jobs
 
-Background jobs let you offload heavy operations (PDF generation, email sending, data processing) away from the Next.js request cycle. The infrastructure is already running — you just need to wire in your logic.
+Background jobs offload heavy operations (PDF generation, email sending, data processing) away from the Next.js request cycle. The infrastructure (Redis + BullMQ) is already running — you just need to wire in your logic.
 
-#### There are two files to edit every time you add a new job type:
+#### Worker architecture
+
+Each job type lives in its own file. `worker/src/worker.ts` is a slim orchestrator that boots them all.
+
+```
+worker/src/
+  adapters/
+    playwright.ts        ← Pluggable browser adapter (PDF, screenshots). Remove if not needed.
+  workers/
+    example.worker.ts    ← Delete this. It's a placeholder.
+    pdf.worker.ts        ← PDF generation via the Playwright adapter.
+    my-thing.worker.ts   ← Your new worker goes here.
+  worker.ts              ← Boots all workers + handles graceful shutdown.
+  queues.ts              ← Queue name registry (worker side).
+  connection.ts          ← Redis URL parser.
+```
+
+#### There are three things to touch every time you add a new job type:
 
 ---
 
-**File 1: `src/lib/queue.ts`** (the Next.js side — enqueues jobs)
+**1. Register the queue name in both registries**
 
-Add your new queue to the `QUEUES` constant:
+They must be identical strings. One lives in the app, one in the worker.
 
 ```ts
+// src/lib/queue.ts  (Next.js app side)
 export const QUEUES = {
-  EXAMPLE: "example",       // ← keep or delete this placeholder
-  SEND_EMAIL: "send_email", // ← your new queue
-  GENERATE_PDF: "generate_pdf",
+  EXAMPLE: "example",
+  PDF_GENERATE: "pdf_generate",
+  SEND_EMAIL: "send_email",  // ← add here
 } as const;
 ```
 
-Then call `enqueue()` from any Server Action or API route:
+```ts
+// worker/src/queues.ts  (worker side)
+export const QUEUES = {
+  EXAMPLE: "example",
+  PDF_GENERATE: "pdf_generate",
+  SEND_EMAIL: "send_email",  // ← add here too — must match exactly
+} as const;
+```
+
+> ⚠️ If these don't match, jobs will be enqueued and silently never consumed.
+
+---
+
+**2. Create a worker file in `worker/src/workers/`**
+
+Each worker exports a factory function that takes the shared Redis `connection`.
+
+```ts
+// worker/src/workers/email.worker.ts
+import { Worker, type Job } from "bullmq";
+import type { ConnectionOptions } from "bullmq";
+import { QUEUES } from "../queues";
+
+export interface EmailJobData {
+  to: string;
+  template: string;
+  userId: string;
+}
+
+export function createEmailWorker(connection: ConnectionOptions) {
+  const worker = new Worker<EmailJobData>(
+    QUEUES.SEND_EMAIL,
+    async (job: Job<EmailJobData>) => {
+      const { to, template, userId } = job.data;
+      // Your logic here — call Resend, Brevo, Nodemailer, etc.
+      await sendTransactionalEmail({ to, template });
+      return { sent: true };
+    },
+    {
+      connection,
+      concurrency: 10, // tune to your VPS RAM — email is cheap, PDFs are not
+    }
+  );
+
+  worker.on("completed", (job) => console.log(`[email] ✓ ${job.id}`));
+  worker.on("failed", (job, err) => console.error(`[email] ✗ ${job?.id}`, err.message));
+
+  return worker;
+}
+```
+
+---
+
+**3. Register the worker in `worker/src/worker.ts`**
+
+```ts
+import { createEmailWorker } from "./workers/email.worker";
+
+const workers = [
+  createExampleWorker(connection),
+  createPdfWorker(connection),
+  createEmailWorker(connection),  // ← add here
+];
+
+async function shutdown() {
+  await Promise.all(workers.map((w) => w.close()));
+  // ...
+}
+```
+
+---
+
+**4. Enqueue jobs from the Next.js app**
 
 ```ts
 // src/app/actions/onboarding.ts
@@ -174,66 +264,50 @@ export async function sendWelcomeEmail(userId: string, email: string) {
 ```ts
 enqueue(
   queue: QueueName,       // must match a key in QUEUES
-  data: object,           // any serializable payload — this is what the worker receives
+  data: object,           // serializable payload — this is what the worker receives as job.data
   opts?: {
-    delay?: number,       // delay in ms before the job is executed
+    delay?: number,       // delay in ms before the job runs
     attempts?: number,    // override default of 3 retries
-    jobId?: string,       // set a deterministic ID to prevent duplicate jobs
+    jobId?: string,       // deterministic ID to deduplicate jobs
   }
 )
 ```
 
----
-
-**File 2: `worker/src/worker.ts`** (the worker side — processes jobs)
-
-Add a new `Worker` instance for each queue:
-
-```ts
-import { Worker, type Job } from "bullmq";
-import { getRedisConnection } from "./connection";
-import { QUEUES } from "./queues";
-
-const connection = getRedisConnection();
-
-// --- Your new worker ---
-const emailWorker = new Worker(
-  QUEUES.SEND_EMAIL,
-  async (job: Job) => {
-    const { userId, email, template } = job.data;
-
-    // Your actual logic here — call Resend, Brevo, NodeMailer, etc.
-    await sendTransactionalEmail({ to: email, template });
-
-    return { sent: true };
-  },
-  {
-    connection,
-    concurrency: 10, // How many jobs to run in parallel — tune to your VPS RAM
-  }
-);
-
-emailWorker.on("completed", (job) => console.log(`[email] ✓ ${job.id}`));
-emailWorker.on("failed", (job, err) => console.error(`[email] ✗ ${job?.id}`, err.message));
-```
-
-Also add the queue name to **`worker/src/queues.ts`** to keep both sides in sync:
-
-```ts
-export const QUEUES = {
-  EXAMPLE: "example",
-  SEND_EMAIL: "send_email",
-  GENERATE_PDF: "generate_pdf",
-} as const;
-```
-
-> ⚠️ **Both `QUEUES` objects must stay in sync.** If the name in `src/lib/queue.ts` and `worker/src/queues.ts` don't match exactly, jobs will be enqueued but never consumed.
-
-After editing the worker, rebuild and restart it:
+After editing any worker file, rebuild and restart:
 
 ```bash
 docker compose build worker && docker compose up -d worker
 ```
+
+#### The Playwright adapter (PDF / Screenshots)
+
+The boilerplate ships with a headless browser adapter at `worker/src/adapters/playwright.ts`. It is completely decoupled from BullMQ — no queue logic inside it.
+
+The `pdf.worker.ts` uses it like this:
+
+```ts
+import { generatePdf } from "../adapters/playwright";
+
+const pdfBuffer = await generatePdf("https://your-app.com/invoice/123", {
+  format: "A4",
+  printBackground: true,
+});
+// returns a Buffer — store it in S3, stream it to the user, etc.
+```
+
+The adapter also exposes:
+- `takeScreenshot(url, opts)` — returns a `Buffer` (PNG or JPEG)
+- `withPage(async (page, context) => { ... })` — raw low-level access to a Playwright page
+- `closeBrowser()` — called during graceful shutdown in `worker.ts`
+
+**PDF worker concurrency:** Chromium uses ~150-300MB per context. The PDF worker is capped at `concurrency: 1` plus a rate limiter (5 jobs / 10s). Increase only after benchmarking your specific VPS load.
+
+**If your product doesn't need PDFs:**
+1. Delete `worker/src/adapters/playwright.ts`
+2. Delete `worker/src/workers/pdf.worker.ts`
+3. Remove `PDF_GENERATE` from both `QUEUES` registries
+4. Remove `playwright` from `worker/package.json`
+5. In `worker/Dockerfile`, switch back to `node:24-slim` without the Playwright install — or revert to Alpine for a smaller image
 
 ---
 
@@ -323,8 +397,11 @@ Before deploying to production, ensure these are set:
 | `src/app/robots.ts` | Robots.txt — crawler access control |
 | `src/app/sitemap.ts` | Dynamic XML sitemap |
 | `prisma/schema.prisma` | Database models |
-| `worker/src/worker.ts` | BullMQ job processors — one Worker per queue |
-| `worker/src/queues.ts` | Canonical queue name registry (worker side) |
+| `worker/src/worker.ts` | Slim orchestrator — boots all workers, handles graceful shutdown |
+| `worker/src/workers/example.worker.ts` | Placeholder worker — delete and replace with real domain workers |
+| `worker/src/workers/pdf.worker.ts` | PDF generation worker — `concurrency: 1`, uses Playwright adapter |
+| `worker/src/adapters/playwright.ts` | Pluggable headless Chromium adapter — `generatePdf()`, `takeScreenshot()`, `withPage()` |
+| `worker/src/queues.ts` | Canonical queue name registry (worker side — must mirror `src/lib/queue.ts`) |
 | `docs/foundry-action-plan.md` | Full implementation status and architecture decisions |
 
 
