@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import bcrypt from "bcryptjs";
+import argon2 from "argon2";
 import { db } from "@/lib/db";
 import { createSession, deleteSession } from "@/lib/session";
 import {
@@ -37,7 +37,7 @@ export async function signup(
   }
 
   // 3. Hash password and create user
-  const passwordHash = await bcrypt.hash(password, 12);
+  const passwordHash = await argon2.hash(password);
   const user = await db.user.create({
     data: { name, email, passwordHash },
   });
@@ -73,7 +73,7 @@ export async function login(
   }
 
   // 3. Verify password
-  const isValid = await bcrypt.compare(password, user.passwordHash);
+  const isValid = await argon2.verify(user.passwordHash, password);
   if (!isValid) {
     return { message: "Invalid email or password." };
   }

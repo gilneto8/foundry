@@ -13,15 +13,20 @@ export interface SessionPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Key
+// Key — lazily resolved so the module can be imported at build time
+// without SESSION_SECRET being present (Docker builds exclude .env).
 // ---------------------------------------------------------------------------
-const SESSION_SECRET = process.env.SESSION_SECRET;
+let _encodedKey: Uint8Array | null = null;
 
-if (!SESSION_SECRET) {
-  throw new Error("SESSION_SECRET environment variable is not set.");
+function getKey(): Uint8Array {
+  if (_encodedKey) return _encodedKey;
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) {
+    throw new Error("SESSION_SECRET environment variable is not set.");
+  }
+  _encodedKey = new TextEncoder().encode(secret);
+  return _encodedKey;
 }
-
-const encodedKey = new TextEncoder().encode(SESSION_SECRET);
 
 // ---------------------------------------------------------------------------
 // Encryption / Decryption
@@ -31,14 +36,14 @@ export async function encrypt(payload: SessionPayload): Promise<string> {
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("7d")
-    .sign(encodedKey);
+    .sign(getKey());
 }
 
 export async function decrypt(
   token: string | undefined = ""
 ): Promise<SessionPayload | null> {
   try {
-    const { payload } = await jwtVerify(token, encodedKey, {
+    const { payload } = await jwtVerify(token, getKey(), {
       algorithms: ["HS256"],
     });
     return payload as unknown as SessionPayload;
