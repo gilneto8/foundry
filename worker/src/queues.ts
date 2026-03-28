@@ -12,6 +12,10 @@ export const QUEUES = {
   PDF_GENERATE: "pdf_generate",
   /** Stripe webhook events — signature-verified by the route handler, processed here */
   STRIPE_WEBHOOK: "stripe_webhook",
+  /** Transactional & marketing emails — pre-rendered HTML sent via Nodemailer/SMTP */
+  EMAIL_SEND: "email_send",
+  /** Dead-letter queue — exhausted email jobs land here after all retry attempts fail */
+  EMAIL_DLQ: "email_dlq",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

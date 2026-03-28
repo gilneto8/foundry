@@ -1,8 +1,7 @@
 import { verifySession } from "@/lib/session";
 import { getSubscription } from "@/lib/subscription";
 import { AppShell } from "@/components/layout";
-import { logout } from "@/app/actions/auth";
-import { Button } from "@/components/ui/button";
+import { HeaderNav } from "@/components/layout/HeaderNav";
 import { ManageSubscriptionButton } from "@/components/billing/manage-subscription-button";
 
 /**
@@ -22,7 +21,7 @@ export default async function DashboardPage() {
   const hasCustomer = !!subscription?.stripeCustomerId;
 
   return (
-    <AppShell appName="Foundry">
+    <AppShell appName="Foundry" headerActions={<HeaderNav />}>
       <div className="space-y-6">
         {/* Payment failure banner — shown when invoice.payment_failed was received */}
         {isPastDue && (
@@ -54,21 +53,12 @@ export default async function DashboardPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Manage Subscription — only shown when a Stripe customer exists */}
-            {hasCustomer && (
-              <ManageSubscriptionButton variant="outline" size="sm">
-                Manage Subscription
-              </ManageSubscriptionButton>
-            )}
-
-            {/* Logout */}
-            <form action={logout}>
-              <Button type="submit" variant="outline" size="sm">
-                Sign out
-              </Button>
-            </form>
-          </div>
+          {/* Manage Subscription — only shown when a Stripe customer exists */}
+          {hasCustomer && (
+            <ManageSubscriptionButton variant="outline" size="sm">
+              Manage Subscription
+            </ManageSubscriptionButton>
+          )}
         </div>
 
         {/* Placeholder content */}

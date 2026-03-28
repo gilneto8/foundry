@@ -9,14 +9,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
 
   // -------------------------------------------------------------------------
-  // Disable Next.js telemetry in production builds.
-  // -------------------------------------------------------------------------
-  // env var alternative: NEXT_TELEMETRY_DISABLED=1
-
-  // -------------------------------------------------------------------------
   // Streaming: disable nginx buffering for SSR streaming support.
-  // Pair this with `proxy_buffering off` in your nginx config, or use the
-  // X-Accel-Buffering header approach below.
   // -------------------------------------------------------------------------
   async headers() {
     return [
@@ -32,5 +25,6 @@ const nextConfig: NextConfig = {
     ];
   },
 };
+
 
 export default nextConfig;

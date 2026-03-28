@@ -39,7 +39,7 @@ export const logger = pino({
 
   // Redact sensitive fields before they hit stdout
   redact: {
-    paths: ["*.password", "*.passwordHash", "*.token", "*.secret", "*.cookie"],
+    paths: ["*.password", "*.passwordHash", "*.token", "*.secret", "*.cookie", "*.to"],
     censor: "[REDACTED]",
   },
 
