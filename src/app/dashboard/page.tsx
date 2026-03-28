@@ -1,7 +1,9 @@
 import { verifySession } from "@/lib/session";
+import { getSubscription } from "@/lib/subscription";
 import { AppShell } from "@/components/layout";
 import { logout } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
+import { ManageSubscriptionButton } from "@/components/billing/manage-subscription-button";
 
 /**
  * /dashboard — Protected route.
@@ -10,9 +12,31 @@ import { Button } from "@/components/ui/button";
 export default async function DashboardPage() {
   const session = await verifySession();
 
+  // ---------------------------------------------------------------------------
+  // Billing state — fetch the subscription for this user.
+  // Use verifySubscription() instead of getSubscription() if this route
+  // should be hard-gated behind an active subscription.
+  // ---------------------------------------------------------------------------
+  const subscription = await getSubscription(session.userId);
+  const isPastDue = subscription?.status === "PAST_DUE";
+  const hasCustomer = !!subscription?.stripeCustomerId;
+
   return (
     <AppShell appName="Foundry">
       <div className="space-y-6">
+        {/* Payment failure banner — shown when invoice.payment_failed was received */}
+        {isPastDue && (
+          <div className="flex items-center justify-between rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            <span>
+              ⚠️ Your last payment failed. Please update your payment method to keep
+              access.
+            </span>
+            <ManageSubscriptionButton variant="destructive" size="sm">
+              Update Payment
+            </ManageSubscriptionButton>
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground">
@@ -30,12 +54,21 @@ export default async function DashboardPage() {
             </p>
           </div>
 
-          {/* Logout */}
-          <form action={logout}>
-            <Button type="submit" variant="outline" size="sm">
-              Sign out
-            </Button>
-          </form>
+          <div className="flex items-center gap-2">
+            {/* Manage Subscription — only shown when a Stripe customer exists */}
+            {hasCustomer && (
+              <ManageSubscriptionButton variant="outline" size="sm">
+                Manage Subscription
+              </ManageSubscriptionButton>
+            )}
+
+            {/* Logout */}
+            <form action={logout}>
+              <Button type="submit" variant="outline" size="sm">
+                Sign out
+              </Button>
+            </form>
+          </div>
         </div>
 
         {/* Placeholder content */}

@@ -10,6 +10,8 @@ export const QUEUES = {
   EXAMPLE: "example",
   /** PDF generation via headless Chromium — plugged into the Playwright adapter */
   PDF_GENERATE: "pdf_generate",
+  /** Stripe webhook events — signature-verified by the route handler, processed here */
+  STRIPE_WEBHOOK: "stripe_webhook",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

@@ -21,6 +21,7 @@ import { QUEUES } from "./queues";
 // Workers
 import { createExampleWorker } from "./workers/example.worker";
 import { createPdfWorker, closeBrowser } from "./workers/pdf.worker";
+import { createStripeWebhookWorker } from "./workers/stripe-webhook.worker";
 
 const connection = getRedisConnection();
 
@@ -28,6 +29,7 @@ const connection = getRedisConnection();
 const workers = [
   createExampleWorker(connection),
   createPdfWorker(connection),
+  createStripeWebhookWorker(connection),
 ];
 
 logger.info(

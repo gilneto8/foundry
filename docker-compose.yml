@@ -59,11 +59,12 @@ services:
   # ----------------------------------------------------------
   worker:
     build:
-      context: ./worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: worker/Dockerfile
     container_name: foundry_worker
     restart: unless-stopped
     environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-foundry}:${POSTGRES_PASSWORD:-foundry_secret}@db:5432/${POSTGRES_DB:-foundry}?schema=public"
       REDIS_URL: "redis://redis:6379"
       NODE_ENV: production
     # Same json-file logging as the app — Promtail picks this up automatically.
@@ -75,6 +76,8 @@ services:
         max-file: "5"
     depends_on:
       redis:
+        condition: service_healthy
+      db:
         condition: service_healthy
     networks:
       - foundry_net

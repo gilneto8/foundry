@@ -6,6 +6,16 @@ generator client {
   output   = "../src/generated/prisma"
 }
 
+// Worker generator — produces a standard CJS client for the worker process.
+// The worker does not use a bundler, so it cannot use the TypeScript-first
+// "prisma-client" generator. This generator produces compiled .js files
+// compatible with plain Node.js require().
+generator workerClient {
+  provider = "prisma-client-js"
+  output   = "../worker/src/generated/prisma-cjs"
+}
+
+
 datasource db {
   provider = "postgresql"
 }
@@ -23,7 +33,8 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  sessions Session[]
+  sessions     Session[]
+  subscription Subscription?
 
   @@map("users")
 }
@@ -48,4 +59,39 @@ model Session {
 
   @@index([userId])
   @@map("sessions")
+}
+
+// ---------------------------------------------------------------------------
+// SUBSCRIPTION STATUS
+// ---------------------------------------------------------------------------
+enum SubscriptionStatus {
+  INACTIVE   // Default — no active subscription
+  TRIALING   // Free trial active (future-proof)
+  ACTIVE     // Paid and current
+  PAST_DUE   // Payment failed — dunning in progress
+  CANCELED   // Subscription explicitly canceled
+}
+
+// ---------------------------------------------------------------------------
+// SUBSCRIPTION
+// 1-to-1 with User. Stores all Stripe billing state.
+// planKey mirrors the key in src/lib/subscription.ts PLANS config,
+// so the app never has to reverse-engineer Stripe Price IDs.
+// ---------------------------------------------------------------------------
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  stripePriceId        String?
+  planKey              String?            // e.g. "PRO" — maps to PLANS["PRO"]
+  status               SubscriptionStatus @default(INACTIVE)
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
 }

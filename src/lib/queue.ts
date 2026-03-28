@@ -19,6 +19,8 @@ export const QUEUES = {
   EXAMPLE: "example",
   /** PDF generation — enqueue from a Server Action, processed by the Playwright adapter in the worker */
   PDF_GENERATE: "pdf_generate",
+  /** Stripe webhook events — enqueued by the webhook route handler, processed by stripe-webhook.worker.ts */
+  STRIPE_WEBHOOK: "stripe_webhook",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

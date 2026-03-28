@@ -117,8 +117,52 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
+# Step 0.5 — Active subscriber check
+# Aborts teardown if any paying or trial users exist.
+# This prevents accidentally nuking an app with live customers.
+# If you have confirmed there are no active subscribers, comment out
+# this block or manually cancel them in the Stripe dashboard first.
+# ---------------------------------------------------------------------------
+log "Step 0.5 — Checking for active subscribers..."
+
+ACTIVE_COUNT=0
+if [[ "$DRY_RUN" != "1" ]]; then
+    # Only run if the subscriptions table exists (it won't if Stripe was never set up)
+    TABLE_EXISTS=$(PGPASSWORD="${DB_PASSWORD:-}" psql \
+        -h 127.0.0.1 \
+        -p "$DB_PORT" \
+        -U "$DB_USER" \
+        -d "$DB_NAME" \
+        -t -c "SELECT to_regclass('public.subscriptions');" 2>/dev/null | xargs)
+
+    if [[ "$TABLE_EXISTS" == "subscriptions" ]]; then
+        ACTIVE_COUNT=$(PGPASSWORD="${DB_PASSWORD:-}" psql \
+            -h 127.0.0.1 \
+            -p "$DB_PORT" \
+            -U "$DB_USER" \
+            -d "$DB_NAME" \
+            -t -c "SELECT COUNT(*) FROM subscriptions WHERE status IN ('ACTIVE','TRIALING','PAST_DUE');" \
+            2>/dev/null | xargs)
+    fi
+else
+    echo "[DRY-RUN] SELECT COUNT(*) FROM subscriptions WHERE status IN ('ACTIVE','TRIALING','PAST_DUE')"
+fi
+
+if [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] && [[ "$ACTIVE_COUNT" -gt 0 ]]; then
+    echo ""
+    warn "ABORT: $ACTIVE_COUNT active subscriber(s) detected."
+    warn "Cancel all subscriptions in the Stripe dashboard before running teardown."
+    warn "Snapshot is already saved at: $SNAPSHOT_FILE"
+    exit 1
+fi
+
+log "✓ No active subscribers found. Safe to proceed."
+echo ""
+
+# ---------------------------------------------------------------------------
 # Step 2 — Confirm before destruction
 # ---------------------------------------------------------------------------
+
 warn "The next steps are DESTRUCTIVE and irreversible."
 warn "Snapshot is saved. Ready to tear down: $PRODUCT_NAME"
 echo ""

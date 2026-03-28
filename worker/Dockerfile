@@ -2,6 +2,14 @@
 # Foundry Worker — Dockerfile
 # Standalone Node.js process for BullMQ job execution.
 #
+# Build context: repo root (set in docker-compose.yml)
+# Reason: the worker needs access to prisma/schema.prisma and
+# prisma.config.ts to generate the Prisma client during build.
+#
+# Two Prisma generators:
+#   "prisma-client"    → src/generated/prisma       (Next.js, bundler-only)
+#   "prisma-client-js" → worker/src/generated/prisma-cjs (worker, plain Node.js CJS)
+#
 # Base: node:24-slim (Debian) — NOT Alpine.
 # Reason: Playwright's bundled Chromium does not support Alpine's
 # musl libc. Debian slim is the officially supported target.
@@ -13,13 +21,14 @@
 # ============================================================
 
 # ============================================================
-# Stage 1 — deps: Install Node deps + Playwright Chromium
+# Stage 1 — deps: Install worker Node deps + Playwright Chromium
 # ============================================================
 FROM node:24.13.0-slim AS deps
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
+# Copy only the worker's package files for dependency install
+COPY worker/package.json worker/package-lock.json* ./
 
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --no-audit --no-fund
@@ -34,19 +43,46 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN npx playwright install --with-deps chromium
 
 # ============================================================
-# Stage 2 — builder: Compile TypeScript to CommonJS
+# Stage 2 — prisma: Generate the CJS client for the worker.
+# Uses the root package (prisma CLI) to run both generators:
+#   - prisma-client    → src/generated/prisma         (discarded here)
+#   - prisma-client-js → worker/src/generated/prisma-cjs  (used by worker)
+# ============================================================
+FROM node:24.13.0-slim AS prisma
+
+WORKDIR /app
+
+# Install only the root package (for prisma CLI)
+COPY package.json package-lock.json* ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund --ignore-scripts
+
+# Copy prisma schema and config
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+
+# Generate both clients. Worker output lands at worker/src/generated/prisma-cjs.
+RUN npx prisma generate
+
+# ============================================================
+# Stage 3 — builder: Compile TypeScript to CommonJS
 # ============================================================
 FROM node:24.13.0-slim AS builder
 
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+COPY worker ./worker
 
+# Copy the generated CJS Prisma client into the worker source.
+# This is what db.ts imports from ./generated/prisma-cjs.
+COPY --from=prisma /app/worker/src/generated ./worker/src/generated
+
+WORKDIR /app/worker
 RUN npm run build
 
 # ============================================================
-# Stage 3 — runner: Production image
+# Stage 4 — runner: Production image
 # ============================================================
 FROM node:24.13.0-slim AS runner
 
@@ -61,9 +97,14 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 # These are baked in here as a fallback. The adapter also sets them in code.
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/ms-playwright/chromium-*/chrome-linux/chrome
 
-# Copy compiled app + node_modules from build stages
+# Copy compiled worker + its node_modules
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/worker/dist ./dist
+
+# Copy the generated CJS Prisma client runtime.
+# dist/db.js requires "./generated/prisma-cjs" — relative to /app/dist,
+# that resolves to /app/dist/generated/prisma-cjs.
+COPY --from=prisma /app/worker/src/generated/prisma-cjs ./dist/generated/prisma-cjs
 
 # Copy Playwright browser binaries from deps stage
 COPY --from=deps /ms-playwright /ms-playwright
@@ -86,4 +127,3 @@ RUN chown -R worker:worker /app /ms-playwright
 USER worker
 
 CMD ["node", "dist/worker.js"]
-

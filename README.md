@@ -486,9 +486,157 @@ Before deploying to production, ensure these are set:
 | `DATABASE_URL` | ✅ | PostgreSQL connection string |
 | `SESSION_SECRET` | ✅ | 32-byte secret for JWT signing. Generate: `openssl rand -base64 32` |
 | `REDIS_URL` | ✅ | Redis connection string (set automatically by compose for Docker) |
-| `NEXT_PUBLIC_APP_URL` | ✅ | Your public domain — used for canonical URLs and sitemap |
+| `NEXT_PUBLIC_APP_URL` | ✅ | Your public domain — used for canonical URLs, sitemap, and Stripe redirects |
+| `STRIPE_SECRET_KEY` | ⚡ | Stripe secret key (`sk_test_...` locally, `sk_live_...` in production) |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | ⚡ | Stripe publishable key — safe to expose to the browser |
+| `STRIPE_WEBHOOK_SECRET` | ⚡ | Stripe webhook secret (`whsec_...`). See Step 10 for local dev setup |
+| `STRIPE_PRICE_ID_PRO` | ⚡ | Stripe Price ID for the Pro tier. Create in the Stripe dashboard |
+
+> ⚡ = Required only if using the Stripe billing layer. Leave unset to skip billing entirely.
 
 ---
+
+### Step 10 — Configure Stripe Billing
+
+The boilerplate ships with a complete, generic billing layer. After cloning, all you need to do is fill in your Stripe keys and update the placeholder copy.
+
+#### What ships out-of-the-box
+
+| Piece | Description |
+|---|---|
+| `src/lib/stripe.ts` | Lazy Stripe client singleton |
+| `src/lib/subscription.ts` | `PLANS` config + `verifySubscription()` utility |
+| `src/app/pricing/page.tsx` | Placeholder pricing page with a single plan card |
+| `src/app/api/stripe/create-checkout-session` | Creates a Stripe Hosted Checkout session |
+| `src/app/api/stripe/create-portal-session` | Creates a Stripe Customer Portal session |
+| `src/app/api/stripe/webhook` | Receives Stripe events, enqueues to BullMQ |
+| `src/app/api/stripe/dev-fulfill` | **Dev-only** bypass — sets a user to ACTIVE without Stripe |
+| `worker/src/workers/stripe-webhook.worker.ts` | Processes Stripe events from the queue |
+| `src/components/billing/manage-subscription-button.tsx` | "Manage Subscription" button → Stripe portal |
+| Dashboard PAST_DUE banner | Warning shown when `invoice.payment_failed` is received |
+
+---
+
+#### 1. Get your Stripe keys
+
+1. Go to [https://dashboard.stripe.com/apikeys](https://dashboard.stripe.com/apikeys)
+2. Copy your **Secret key** (`sk_test_...`) and **Publishable key** (`pk_test_...`)
+3. Create a product and price in [https://dashboard.stripe.com/products](https://dashboard.stripe.com/products)
+4. Copy the **Price ID** (`price_...`)
+5. Fill in your `.env`:
+
+```bash
+STRIPE_SECRET_KEY="sk_test_..."
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY="pk_test_..."
+STRIPE_PRICE_ID_PRO="price_..."
+NEXT_PUBLIC_APP_URL="http://localhost:3000"
+```
+
+---
+
+#### 2. Set up the Customer Portal
+
+Before the portal works, you must enable it in the Stripe dashboard:
+[https://dashboard.stripe.com/settings/billing/portal](https://dashboard.stripe.com/settings/billing/portal)
+
+Just enable it and save — no custom configuration needed.
+
+---
+
+#### 3. Local dev — Stripe webhook forwarding
+
+Webhooks need a publicly accessible URL. For local development, use the [Stripe CLI](https://stripe.com/docs/stripe-cli):
+
+```bash
+# Install the CLI (once)
+brew install stripe/stripe-cli/stripe
+
+# Log in
+stripe login
+
+# Get your local webhook secret
+stripe listen --print-secret
+# → copy the whsec_... value into STRIPE_WEBHOOK_SECRET in your .env
+
+# Forward events to your local server (run in a separate terminal)
+stripe listen --forward-to localhost:3000/api/stripe/webhook
+```
+
+Now complete a test checkout in your browser — the CLI will forward the `checkout.session.completed` event and your BullMQ worker will process it.
+
+---
+
+#### 4. Dev bypass (skip Stripe CLI entirely)
+
+When you're building product features and don't want to deal with the Stripe CLI, use the dev fulfillment bypass to manually set a user to `ACTIVE`:
+
+```bash
+curl -X POST http://localhost:3000/api/stripe/dev-fulfill \
+  -H "Content-Type: application/json" \
+  -d '{"userId": "YOUR_USER_ID_FROM_DB", "planKey": "PRO"}'
+```
+
+> ⚠️ This route **returns 404 in production** (`NODE_ENV=production`). It is safe to ship.
+
+---
+
+#### 5. Update the placeholder pricing page
+
+Open `src/app/pricing/page.tsx` and update the `PLACEHOLDER_PLAN` object:
+
+```ts
+const PLACEHOLDER_PLAN = {
+  key: "PRO",
+  name: "Pro",                   // ← Your plan name
+  price: "€29 / month",         // ← Your real price
+  features: [
+    "Unlimited exports",         // ← Your real features
+    "Priority support",
+    "Custom branding",
+  ],
+};
+```
+
+---
+
+#### 6. Gate a route behind a subscription
+
+Use `verifySubscription()` anywhere you use `verifySession()`. It works the same way — redirects to `/pricing` if the user is not `ACTIVE`:
+
+```ts
+// src/app/some-protected-route/page.tsx
+import { verifySession } from "@/lib/session";
+import { verifySubscription } from "@/lib/subscription";
+
+export default async function ProtectedPage() {
+  const session = await verifySession();
+  const subscription = await verifySubscription(session.userId); // → redirects to /pricing if not ACTIVE
+  // ...
+}
+```
+
+---
+
+#### 7. Add a second tier
+
+1. Create a second price in the Stripe dashboard
+2. Add to `.env`: `STRIPE_PRICE_ID_BUSINESS="price_..."`
+3. Uncomment the `BUSINESS` entry in `src/lib/subscription.ts` → `PLANS`
+4. Add a second plan card to `src/app/pricing/page.tsx`
+
+---
+
+#### 8. Webhook events and database state
+
+| Stripe event | Result in `subscriptions` table |
+|---|---|
+| `checkout.session.completed` | `status = ACTIVE`, `stripeCustomerId`, `stripeSubscriptionId`, `planKey` set |
+| `customer.subscription.updated` | `status`, `stripePriceId`, `planKey`, `cancelAtPeriodEnd` synced |
+| `customer.subscription.deleted` | `status = CANCELED` |
+| `invoice.payment_failed` | `status = PAST_DUE` — banner shown in dashboard |
+
+---
+
 
 ## 📁 Key Files Reference
 
@@ -498,21 +646,32 @@ Before deploying to production, ensure these are set:
 | `src/lib/session.ts` | JWT create/verify, session cookie management |
 | `src/lib/queue.ts` | `enqueue()` — push jobs to Redis from the Next.js app |
 | `src/lib/logger.ts` | Pino logger for the Next.js app (`server-only`) |
+| `src/lib/stripe.ts` | Lazy Stripe client singleton — safe at build time |
+| `src/lib/subscription.ts` | `PLANS` config, `verifySubscription()`, `getSubscription()` |
 | `src/proxy.ts` | Route protection middleware (Next.js 16: `proxy.ts`, not `middleware.ts`) |
 | `src/app/actions/auth.ts` | Signup, Login, Logout Server Actions |
 | `src/app/layout.tsx` | Root metadata — SEO, OpenGraph, Twitter cards |
 | `src/app/robots.ts` | Robots.txt — crawler access control |
 | `src/app/sitemap.ts` | Dynamic XML sitemap |
+| `src/app/pricing/page.tsx` | Placeholder pricing page — update copy before launch |
+| `src/app/api/stripe/create-checkout-session/route.ts` | Creates Stripe Hosted Checkout session |
+| `src/app/api/stripe/create-portal-session/route.ts` | Creates Stripe Customer Portal session |
+| `src/app/api/stripe/webhook/route.ts` | Verifies Stripe signature → enqueues event to BullMQ |
+| `src/app/api/stripe/dev-fulfill/route.ts` | Dev-only bypass — sets user to ACTIVE (404 in production) |
+| `src/components/billing/manage-subscription-button.tsx` | "Manage Subscription" client button → Stripe portal |
 | `prisma/schema.prisma` | Database models |
+| `worker/src/db.ts` | Prisma client for the worker process |
 | `worker/src/logger.ts` | Pino logger for the worker process |
 | `worker/src/worker.ts` | Slim orchestrator — boots all workers, handles graceful shutdown |
 | `worker/src/workers/example.worker.ts` | Placeholder worker — delete and replace with real domain workers |
 | `worker/src/workers/pdf.worker.ts` | PDF generation worker — `concurrency: 1`, uses Playwright adapter |
+| `worker/src/workers/stripe-webhook.worker.ts` | Stripe event processor — handles 4 lifecycle events |
 | `worker/src/adapters/playwright.ts` | Pluggable headless Chromium adapter — `generatePdf()`, `takeScreenshot()`, `withPage()` |
 | `worker/src/queues.ts` | Canonical queue name registry (worker side — must mirror `src/lib/queue.ts`) |
 | `deploy/nginx/foundry.conf.template` | Nginx config template — copy, replace `{{APP_DOMAIN}}` + `{{APP_PORT}}`, enable via symlink |
 | `deploy/nginx/README.md` | Full Nginx deployment guide — port registry, Certbot, rollback |
 | `docs/foundry-action-plan.md` | Full implementation status and architecture decisions |
+
 
 
 
