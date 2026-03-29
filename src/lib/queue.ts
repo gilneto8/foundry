@@ -25,6 +25,12 @@ export const QUEUES = {
   EMAIL_SEND: "email_send",
   /** Dead-letter queue — exhausted email jobs land here after all retry attempts fail */
   EMAIL_DLQ: "email_dlq",
+  /**
+   * Stamped PDF generation — renders an HTML string via Playwright and records a
+   * DocumentReceipt with an irrefutable server-side timestamp.
+   * Use for legally-sensitive documents (tacit approval declarations, liability shields).
+   */
+  STAMPED_PDF: "stamped_pdf",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

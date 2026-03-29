@@ -33,8 +33,9 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  sessions     Session[]
-  subscription Subscription?
+  sessions         Session[]
+  subscription     Subscription?
+  documentReceipts DocumentReceipt[]
 
   @@map("users")
 }
@@ -94,4 +95,34 @@ model Subscription {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("subscriptions")
+}
+
+// ---------------------------------------------------------------------------
+// DOCUMENT RECEIPT
+// Audit chain for cryptographically-stamped documents (DocStamper).
+// issuedAt is set BEFORE the PDF renders — that is the legally significant
+// moment. contentHash is written AFTER rendering with the SHA-256 of the
+// output PDF bytes.
+// ---------------------------------------------------------------------------
+model DocumentReceipt {
+  id           String   @id @default(cuid())
+  userId       String
+  /// e.g. "TACIT_APPROVAL_DECLARATION", "TECHNICIAN_LIABILITY_SHIELD"
+  documentType String
+  /// Human-readable external reference, e.g. "<municipalityCode>:<submissionRef>"
+  entityRef    String
+  /// SHA-256 hex digest of the rendered PDF — written once rendering completes.
+  /// null means the PDF job is still in-flight or failed.
+  contentHash  String?
+  /// The legally significant timestamp: recorded BEFORE Playwright launches.
+  issuedAt     DateTime
+  /// Local path or future S3 key to the stored PDF file.
+  storagePath  String?
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([entityRef])
+  @@map("document_receipts")
 }

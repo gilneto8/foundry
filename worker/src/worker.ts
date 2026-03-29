@@ -23,6 +23,7 @@ import { createExampleWorker } from "./workers/example.worker";
 import { createPdfWorker, closeBrowser } from "./workers/pdf.worker";
 import { createStripeWebhookWorker } from "./workers/stripe-webhook.worker";
 import { createEmailWorker } from "./workers/email.worker";
+import { createStampedPdfWorker } from "./workers/stamped-pdf.worker";
 
 const connection = getRedisConnection();
 
@@ -32,6 +33,7 @@ const workers = [
   createPdfWorker(connection),
   createStripeWebhookWorker(connection),
   createEmailWorker(connection),
+  createStampedPdfWorker(connection),
 ];
 
 logger.info(

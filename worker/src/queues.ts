@@ -16,6 +16,8 @@ export const QUEUES = {
   EMAIL_SEND: "email_send",
   /** Dead-letter queue — exhausted email jobs land here after all retry attempts fail */
   EMAIL_DLQ: "email_dlq",
+  /** Stamped PDF — HTML string rendered via Playwright with a DB-backed timestamp receipt */
+  STAMPED_PDF: "stamped_pdf",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
