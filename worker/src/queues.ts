@@ -18,6 +18,8 @@ export const QUEUES = {
   EMAIL_DLQ: "email_dlq",
   /** Stamped PDF — HTML string rendered via Playwright with a DB-backed timestamp receipt */
   STAMPED_PDF: "stamped_pdf",
+  /** Multi-channel alert dispatch — routes to email or SMS via the notification adapter */
+  NOTIFY: "notify",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

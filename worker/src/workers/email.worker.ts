@@ -16,62 +16,15 @@
 // ============================================================
 
 import { Worker, Queue, type Job, type ConnectionOptions } from "bullmq";
-import nodemailer, { type Transporter } from "nodemailer";
 import { QUEUES } from "../queues";
+import { sendEmailDirect, type EmailChannelPayload } from "../adapters/email";
 import { logger } from "../logger";
 
 const log = logger.child({ module: "email-worker" });
 
-// ---------------------------------------------------------------------------
-// EmailPayload — must mirror src/lib/email.ts in the Next.js app
-// ---------------------------------------------------------------------------
-export interface EmailPayload {
-  to: string | string[];
-  subject: string;
-  html: string;
-  text?: string;
-  replyTo?: string;
-  from?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Nodemailer transporter — shared across all jobs in this worker process
-// ---------------------------------------------------------------------------
-let _transporter: Transporter | null = null;
-
-function getTransporter(): Transporter {
-  if (_transporter) return _transporter;
-
-  const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.SMTP_PORT ?? "587", 10);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
-  if (!host || !user || !pass) {
-    throw new Error(
-      "[email-worker] Missing SMTP config. Set SMTP_HOST, SMTP_USER, SMTP_PASS in your environment."
-    );
-  }
-
-  _transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
-
-  return _transporter;
-}
-
-function getFrom(override?: string): string {
-  const from = override ?? process.env.SMTP_FROM;
-  if (!from) {
-    throw new Error(
-      "[email-worker] No sender address. Set SMTP_FROM or pass `from` in the payload."
-    );
-  }
-  return from;
-}
+// EmailPayload is EmailChannelPayload — re-exported for backwards compat
+// with any existing callers that import it from this module.
+export type EmailPayload = EmailChannelPayload;
 
 // ---------------------------------------------------------------------------
 // DLQ Queue reference — used to move exhausted jobs here manually if needed.
@@ -87,6 +40,7 @@ function getDlq(connection: ConnectionOptions): Queue {
   return _dlq;
 }
 
+
 // ---------------------------------------------------------------------------
 // Worker factory
 // ---------------------------------------------------------------------------
@@ -94,23 +48,13 @@ export function createEmailWorker(connection: ConnectionOptions) {
   const worker = new Worker<EmailPayload>(
     QUEUES.EMAIL_SEND,
     async (job: Job<EmailPayload>) => {
-      const { to, subject, html, text, replyTo, from: fromOverride } = job.data;
-      const transporter = getTransporter();
-      const from = getFrom(fromOverride);
-
       log.info(
-        { jobId: job.id, subject, attemptsMade: job.attemptsMade },
+        { jobId: job.id, subject: job.data.subject, attemptsMade: job.attemptsMade },
         "Processing email job"
       );
 
-      await transporter.sendMail({
-        from,
-        to: Array.isArray(to) ? to.join(", ") : to,
-        subject,
-        html,
-        text,
-        replyTo,
-      });
+      // Delegate to the shared email channel adapter
+      await sendEmailDirect(job.data);
     },
     {
       connection,

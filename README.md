@@ -15,7 +15,10 @@ A high-performance SaaS manufacturing line for a single Hetzner VPS. Optimized f
 | Session Management | Stateless JWT via `jose` (HttpOnly cookies) |
 | Background Jobs | BullMQ + Redis 7 |
 | PDF Generation | Playwright (headless Chromium, pluggable adapter) |
-| Email | Nodemailer (SMTP) + React Email templates + BullMQ async delivery + DLQ |
+| Notifications | Multi-channel dispatch via NOTIFY queue: Email (Nodemailer SMTP) + SMS (Vonage REST) |
+| Transactional Email | Nodemailer (SMTP) + React Email templates + BullMQ async delivery + DLQ |
+| Deadline Engine | Holiday-aware Portuguese business-day calculator (national + municipal) with Redis cache |
+| Doc Stamper | Cryptographic PDF timestamping — DB receipt issued before render, SHA-256 content hash |
 | Logging | Pino — structured JSON to stdout, `pino-pretty` in dev |
 | Observability | Docker json-file driver → Promtail `docker_sd_configs` → Loki → Grafana |
 | Containers | Docker — multi-stage build (Alpine for app, Debian slim for worker) |
@@ -186,10 +189,16 @@ Each job type lives in its own file. `worker/src/worker.ts` is a slim orchestrat
 worker/src/
   adapters/
     playwright.ts        ← Pluggable browser adapter (PDF, screenshots). Remove if not needed.
+    stamper.ts           ← DocStamper — renders HTML strings to timestamped PDFs, computes SHA-256.
+    email.ts             ← Email channel adapter (Nodemailer transport). Used by email + notification workers.
+    sms.ts               ← SMS channel adapter (Vonage REST API). Swap for Twilio by reimplementing sendSmsDirect().
+    notification.ts      ← Channel dispatcher — routes NOTIFY jobs to email or SMS adapter.
   workers/
     example.worker.ts    ← Delete this. It's a placeholder.
     pdf.worker.ts        ← PDF generation via the Playwright adapter.
-    email.worker.ts      ← Email delivery via Nodemailer/SMTP. DLQ on exhaustion.
+    email.worker.ts      ← Transactional email delivery (auth, billing). DLQ on exhaustion.
+    notification.worker.ts ← Multi-channel alert dispatch (email + SMS). Use for business event alerts.
+    stamped-pdf.worker.ts  ← Timestamped PDF generation + DocumentReceipt finalisation.
     my-thing.worker.ts   ← Your new worker goes here.
   worker.ts              ← Boots all workers + handles graceful shutdown.
   queues.ts              ← Queue name registry (worker side).
@@ -209,8 +218,10 @@ They must be identical strings. One lives in the app, one in the worker.
 export const QUEUES = {
   EXAMPLE: "example",
   PDF_GENERATE: "pdf_generate",
-  EMAIL_SEND: "email_send",   // already registered — reserved for the email layer
+  EMAIL_SEND: "email_send",   // transactional email (auth, billing)
   EMAIL_DLQ: "email_dlq",    // dead-letter queue for exhausted email jobs
+  NOTIFY: "notify",           // multi-channel alert dispatch (email + SMS)
+  STAMPED_PDF: "stamped_pdf", // cryptographically timestamped PDF generation
   MY_THING: "my_thing",      // ← add your own here
 } as const;
 ```
@@ -220,8 +231,10 @@ export const QUEUES = {
 export const QUEUES = {
   EXAMPLE: "example",
   PDF_GENERATE: "pdf_generate",
-  EMAIL_SEND: "email_send",   // already registered — reserved
+  EMAIL_SEND: "email_send",   // transactional email
   EMAIL_DLQ: "email_dlq",    // dead-letter queue
+  NOTIFY: "notify",           // multi-channel alerts
+  STAMPED_PDF: "stamped_pdf", // timestamped PDFs
   MY_THING: "my_thing",      // ← add here too — must match exactly
 } as const;
 ```
@@ -304,7 +317,7 @@ export async function runMyThing(userId: string, someField: string) {
 }
 ```
 
-> For email sending specifically, use the dedicated email layer described in **Step 11** — it handles SMTP transport, templates, retries, and DLQ automatically.
+> For alert-type notifications (deadline warnings, regulatory changes, tacit approval eligible) use `notify()` from `src/lib/notify.ts` — described in **Step 11**. For transactional emails (auth, billing receipts) use `enqueueEmail()` from `src/lib/email.ts`.
 
 `enqueue()` signature:
 
@@ -542,9 +555,15 @@ Before deploying to production, ensure these are set:
 | `SMTP_USER` | 📧 | SMTP username / API key username |
 | `SMTP_PASS` | 📧 | SMTP password / API key |
 | `SMTP_FROM` | 📧 | Default sender address — e.g. `My App <noreply@myapp.com>` |
+| `VONAGE_API_KEY` | 📱 | Vonage API key — for SMS alert delivery via the NOTIFY queue |
+| `VONAGE_API_SECRET` | 📱 | Vonage API secret |
+| `VONAGE_FROM` | 📱 | SMS sender ID or virtual number (e.g. `AlertaAT` or `+351...`) |
+| `STAMPED_PDF_DIR` | 📄 | Absolute path for persisting stamped PDFs. Mount as a Docker volume in production. |
 
 > ⚡ = Required only if using the Stripe billing layer. Leave unset to skip billing entirely.
-> 📧 = Required only if using the email layer. Leave unset to disable email.
+> 📧 = Required only if sending transactional email. Leave unset to disable.
+> 📱 = Required only if sending SMS alerts via the NOTIFY queue. Leave unset to disable SMS.
+> 📄 = Required if using the DocStamper module. Defaults to `/tmp/stamped-pdfs` (not persistent).
 
 ---
 
@@ -689,24 +708,28 @@ export default async function ProtectedPage() {
 
 ---
 
-### Step 11 — Send Emails
+### Step 11 — Send Notifications
 
-The boilerplate ships with a complete email layer. Configure SMTP credentials in `.env` and call the exposed functions — no other setup required.
+The boilerplate ships with a layered notification system. **Transactional emails** (welcome, password reset, Stripe receipts) use the `EMAIL_SEND` queue. **Business alert notifications** (deadline warnings, regulatory changes, tacit approval events) use the `NOTIFY` queue with multi-channel dispatch — email or SMS in a single call.
 
 #### What ships out-of-the-box
 
 | Piece | Description |
 |---|---|
-| `src/lib/email.ts` | `sendEmail()` (sync, critical path) + `enqueueEmail()` (async BullMQ) |
+| `src/lib/email.ts` | `sendEmail()` (sync, critical path) + `enqueueEmail()` (async BullMQ) — transactional email |
+| `src/lib/notify.ts` | `notify()` — enqueue one or more channel notifications in a single call |
 | `src/emails/welcome.tsx` | Placeholder React Email template — fork this for new templates |
 | `src/emails/index.ts` | Barrel export for all email templates |
-| `worker/src/workers/email.worker.ts` | BullMQ worker — 5 retries, exponential backoff, DLQ on exhaustion |
-| `src/app/admin/queues/` | Bull Board UI — inspect, retry, and drain all queues including the DLQ |
-| `src/app/admin/layout.tsx` | ADMIN-gated admin panel layout (extensible — add new sections here) |
+| `worker/src/adapters/email.ts` | Email channel adapter — Nodemailer transport, shared by both workers |
+| `worker/src/adapters/sms.ts` | SMS channel adapter — Vonage REST API (no SDK). Swap for Twilio by reimplementing `sendSmsDirect()`. |
+| `worker/src/adapters/notification.ts` | Channel dispatcher — `switch` on `channel` field, exhaustiveness-checked |
+| `worker/src/workers/email.worker.ts` | Transactional email processor — 5 retries, exponential backoff, DLQ on exhaustion |
+| `worker/src/workers/notification.worker.ts` | Alert notification processor — routes to email or SMS adapter |
+| `src/app/admin/queues/` | Bull Board UI — inspect, retry, and drain all queues including DLQs |
 
 ---
 
-#### 1. Configure SMTP
+#### 1. Configure transactional email (SMTP)
 
 Add to your `.env`:
 
@@ -729,35 +752,56 @@ Provider quick-reference:
 
 ---
 
-#### 2. Create a template
+#### 2. Configure SMS (Vonage)
 
-Templates are React Email components in `src/emails/`. Fork `welcome.tsx` as a starting point:
+Add to your `.env`:
 
-```tsx
-// src/emails/invoice.tsx
-import { Html, Body, Heading, Text } from "@react-email/components";
-
-export function InvoiceEmail({ name, amount }: { name: string; amount: string }) {
-  return (
-    <Html><Body>
-      <Heading>Your invoice for {amount}</Heading>
-      <Text>Hi {name}, your payment was received. Thank you.</Text>
-    </Body></Html>
-  );
-}
+```bash
+VONAGE_API_KEY="your-vonage-api-key"
+VONAGE_API_SECRET="your-vonage-api-secret"
+VONAGE_FROM="AlertaAT"                 # Sender ID or virtual number (+351...)
 ```
 
-Export it from `src/emails/index.ts`:
+Get credentials at [https://dashboard.nexmo.com/](https://dashboard.nexmo.com/). For Portuguese numbers, a virtual number has better delivery than an alphanumeric sender ID.
 
-```ts
-export { InvoiceEmail } from "./invoice";
-```
+To swap to Twilio: reimplement `sendSmsDirect()` in `worker/src/adapters/sms.ts`. The dispatcher, worker, and app API require zero changes.
 
 ---
 
-#### 3. Send emails
+#### 3. Send alert notifications
 
-**Non-critical (welcome, receipts, digests) → async via BullMQ:**
+```ts
+import { notify, notifyEmail, notifySms } from "@/lib/notify";
+
+// Single channel — email
+await notifyEmail({
+  to: user.email,
+  subject: "Alerta: Prazo expira em 10 dias úteis",
+  html: renderedHtml,
+});
+
+// Single channel — SMS
+await notifySms({
+  to: user.phone,           // E.164 format: +351912345678
+  body: "AlertaAT: O seu prazo expira em 10 dias úteis.",
+});
+
+// Both channels at once — each gets an independent, retriable BullMQ job
+await notify([
+  { channel: "email", to: user.email, subject: "...", html: renderedHtml },
+  { channel: "sms",   to: user.phone, body: "..." },
+]);
+```
+
+All calls are fire-and-forget — they enqueue to BullMQ and return immediately. Each job retries independently (5 attempts, exponential backoff).
+
+---
+
+#### 4. Send transactional emails
+
+For auth and billing emails that bypass the notification channel:
+
+**Non-critical (welcome, receipts) → async via BullMQ:**
 
 ```ts
 import { render } from "@react-email/render";
@@ -766,10 +810,9 @@ import { enqueueEmail } from "@/lib/email";
 
 const html = await render(<WelcomeEmail name={user.name} appName="Acme" />);
 await enqueueEmail({ to: user.email, subject: "Welcome to Acme!", html });
-// → fire-and-forget: 5 retries, exponential backoff, DLQ on exhaustion
 ```
 
-**Critical (password reset, OTP, payment alert) → sync direct send:**
+**Critical (password reset, OTP) → sync direct send:**
 
 ```ts
 import { sendEmail } from "@/lib/email";
@@ -781,29 +824,52 @@ const result = await sendEmail({
 });
 
 if (!result.ok) {
-  // result.error contains the reason — log it, show flash message, etc.
+  // result.error contains the reason
 }
 ```
 
-`sendEmail()` never throws — it always returns `{ ok: true, messageId }` or `{ ok: false, error }`.
+---
+
+#### 5. Create an email template
+
+Templates are React Email components in `src/emails/`. Fork `welcome.tsx` as a starting point:
+
+```tsx
+// src/emails/deadline-warning.tsx
+import { Html, Body, Heading, Text } from "@react-email/components";
+
+export function DeadlineWarningEmail({ daysRemaining, legalDeadline }: { daysRemaining: number; legalDeadline: string }) {
+  return (
+    <Html><Body>
+      <Heading>Aviso de prazo — {daysRemaining} dias úteis restantes</Heading>
+      <Text>O prazo legal expira em {legalDeadline}.</Text>
+    </Body></Html>
+  );
+}
+```
+
+Export from `src/emails/index.ts` and render before calling `notifyEmail()`.
 
 ---
 
-#### 4. Inspect and retry failed emails (DLQ)
+#### 6. Add a new notification channel
 
-When all 5 retry attempts are exhausted, the job is copied to the `email_dlq` queue for manual review.
+1. Create `worker/src/adapters/<channel>.ts` with a `send<Channel>Direct(payload)` function
+2. Add the channel string literal to `NotificationChannel` in `worker/src/adapters/notification.ts`
+3. Add a `case` to the `switch` in `dispatchNotification()`
+4. TypeScript's exhaustiveness check will break the build if you forget the case
 
-**Access Bull Board** (requires a user with `role = ADMIN` in the database):
+The worker, NOTIFY queue, and `src/lib/notify.ts` require **zero changes**.
+
+---
+
+#### 7. Inspect and retry failed notifications (Bull Board)
 
 ```
 https://your-app.com/admin/queues
 ```
 
-From here you can:
-- **Inspect** failed jobs — see `to`, `subject`, `failedReason`, `attemptsMade`, and timestamps
-- **Retry** individual jobs — moves them back to `email_send` for reprocessing
-- **Retry All** — bulk recovery after a provider outage
-- **Delete** — permanently discard dead jobs
+From here you can inspect, retry, or discard failed jobs across all queues — `email_send`, `notify`, and their DLQs.
 
 > **Setting a user as ADMIN:** Update directly in the database until you build an admin UI:
 > ```bash
@@ -812,7 +878,7 @@ From here you can:
 
 ---
 
-#### 5. Preview templates locally
+#### 8. Preview templates locally
 
 React Email ships a dev preview server:
 
@@ -832,7 +898,11 @@ npx email dev --dir src/emails
 | `src/lib/session.ts` | JWT create/verify, session cookie management, `verifyAdminSession()` |
 | `src/lib/queue.ts` | `enqueue()` — push jobs to Redis from the Next.js app |
 | `src/lib/logger.ts` | Pino logger for the Next.js app (`server-only`) |
-| `src/lib/email.ts` | `sendEmail()` (sync) + `enqueueEmail()` (async) — Nodemailer/SMTP transport |
+| `src/lib/email.ts` | `sendEmail()` (sync) + `enqueueEmail()` (async) — transactional email only |
+| `src/lib/notify.ts` | `notify()` / `notifyEmail()` / `notifySms()` — multi-channel alert dispatch |
+| `src/lib/deadline.ts` | `calculateDeadline()` / `calculateSimplexDeadline()` — holiday-aware business-day calculator |
+| `src/lib/holidays.ts` | Portuguese national + municipal holiday resolver — 3-tier cache (memory → Redis → Nager.Date API) |
+| `src/lib/receipt.ts` | `issueReceipt()` — Phase 1 of DocStamper; writes legally-significant `issuedAt` timestamp to DB |
 | `src/lib/stripe.ts` | Lazy Stripe client singleton — safe at build time |
 | `src/lib/subscription.ts` | `PLANS` config, `verifySubscription()`, `getSubscription()` |
 | `src/emails/welcome.tsx` | Placeholder React Email template — fork for new templates |
@@ -857,13 +927,19 @@ npx email dev --dir src/emails
 | `worker/src/worker.ts` | Slim orchestrator — boots all workers, handles graceful shutdown |
 | `worker/src/workers/example.worker.ts` | Placeholder worker — delete and replace with real domain workers |
 | `worker/src/workers/pdf.worker.ts` | PDF generation worker — `concurrency: 1`, uses Playwright adapter |
-| `worker/src/workers/email.worker.ts` | Email delivery worker — 5 retries, exponential backoff, DLQ copy on exhaustion |
+| `worker/src/workers/email.worker.ts` | Transactional email worker — 5 retries, exponential backoff, DLQ copy on exhaustion |
+| `worker/src/workers/notification.worker.ts` | Multi-channel alert worker — delegates to notification dispatcher, own DLQ |
+| `worker/src/workers/stamped-pdf.worker.ts` | Timestamped PDF worker — renders via stamper adapter, finalises DocumentReceipt |
 | `worker/src/workers/stripe-webhook.worker.ts` | Stripe event processor — handles 4 lifecycle events |
 | `worker/src/adapters/playwright.ts` | Pluggable headless Chromium adapter — `generatePdf()`, `takeScreenshot()`, `withPage()` |
+| `worker/src/adapters/stamper.ts` | DocStamper — renders HTML strings to PDFs, injects audit footer, computes SHA-256 |
+| `worker/src/adapters/email.ts` | Email channel adapter — Nodemailer transport singleton, shared by both email workers |
+| `worker/src/adapters/sms.ts` | SMS channel adapter — Vonage REST API via `fetch`, no SDK |
+| `worker/src/adapters/notification.ts` | Channel dispatcher — routes NOTIFY jobs to the correct adapter, exhaustiveness-checked |
 | `worker/src/queues.ts` | Canonical queue name registry (worker side — must mirror `src/lib/queue.ts`) |
 | `deploy/nginx/foundry.conf.template` | Nginx config template — copy, replace `{{APP_DOMAIN}}` + `{{APP_PORT}}`, enable via symlink |
 | `deploy/nginx/README.md` | Full Nginx deployment guide — port registry, Certbot, rollback |
-| `docs/foundry-action-plan.md` | Full implementation status and architecture decisions |
+| `docs/foundry-module-gaps.md` | Engineering gap analysis and implementation roadmap for compliance modules |
 
 
 

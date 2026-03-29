@@ -31,6 +31,13 @@ export const QUEUES = {
    * Use for legally-sensitive documents (tacit approval declarations, liability shields).
    */
   STAMPED_PDF: "stamped_pdf",
+  /**
+   * Multi-channel notification dispatch — routes to email or SMS based on the
+   * `channel` field in the payload. Use for alert-type messages (deadline warnings,
+   * regulatory change detected, tacit approval ready). NOT for transactional
+   * emails (auth, billing) — those stay on EMAIL_SEND.
+   */
+  NOTIFY: "notify",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
