@@ -25,6 +25,7 @@ import { createStripeWebhookWorker } from "./workers/stripe-webhook.worker";
 import { createEmailWorker } from "./workers/email.worker";
 import { createStampedPdfWorker } from "./workers/stamped-pdf.worker";
 import { createNotificationWorker } from "./workers/notification.worker";
+import { createRegScraperWorker } from "./workers/reg-scraper.worker";
 
 const connection = getRedisConnection();
 
@@ -36,6 +37,7 @@ const workers = [
   createEmailWorker(connection),
   createStampedPdfWorker(connection),
   createNotificationWorker(connection),
+  createRegScraperWorker(connection),
 ];
 
 logger.info(

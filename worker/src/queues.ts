@@ -20,6 +20,8 @@ export const QUEUES = {
   STAMPED_PDF: "stamped_pdf",
   /** Multi-channel alert dispatch — routes to email or SMS via the notification adapter */
   NOTIFY: "notify",
+  /** Regulatory document scraper — monitors public pages for keyword hits/content changes */
+  REG_SCRAPER: "reg_scraper",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

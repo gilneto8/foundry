@@ -38,6 +38,12 @@ export const QUEUES = {
    * emails (auth, billing) — those stay on EMAIL_SEND.
    */
   NOTIFY: "notify",
+  /**
+   * Regulatory document scraper — fetches public municipal/DR pages and
+   * triggers ScrapeAlert + NOTIFY dispatch on keyword match or content change.
+   * Jobs: { type: "SCRAPE_ONE", subscriptionId } | { type: "SCRAPE_ALL" }
+   */
+  REG_SCRAPER: "reg_scraper",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

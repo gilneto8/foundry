@@ -33,9 +33,10 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  sessions         Session[]
-  subscription     Subscription?
-  documentReceipts DocumentReceipt[]
+  sessions            Session[]
+  subscription        Subscription?
+  documentReceipts    DocumentReceipt[]
+  scrapeSubscriptions ScrapeSubscription[]
 
   @@map("users")
 }
@@ -125,4 +126,66 @@ model DocumentReceipt {
   @@index([userId])
   @@index([entityRef])
   @@map("document_receipts")
+}
+
+// ---------------------------------------------------------------------------
+// SCRAPE SUBSCRIPTION
+// A user's intent to monitor a specific URL for regulatory changes.
+// The RegDocScraper worker polls all active subscriptions on a schedule.
+// ---------------------------------------------------------------------------
+model ScrapeSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  /// Public URL to monitor (HTTPS, publicly accessible, no login required)
+  url       String
+  /// JSON array of lowercase keyword strings to match against page text
+  /// e.g. ["uso do solo", "zonamento", "plano diretor"]
+  keywords  String   // stored as JSON string; parse in application layer
+  /// Optional CSS selector to narrow the scrape to a specific page region.
+  /// null = scrape full visible text of the page body.
+  selector  String?
+  /// Human-readable label, e.g. "Câmara Municipal de Lisboa — PDM"
+  label     String?
+  /// When false, the subscription is paused (not polled). Default: true.
+  active    Boolean  @default(true)
+  /// SHA-256 of the last successfully scraped page text. null = never scraped.
+  /// Used by the worker for change-detection: alert only when hash changes.
+  lastHash       String?
+  /// Timestamp of the last completed scrape attempt (success or failure).
+  lastScrapedAt  DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  alerts ScrapeAlert[]
+
+  @@index([userId])
+  @@index([active])
+  @@map("scrape_subscriptions")
+}
+
+// ---------------------------------------------------------------------------
+// SCRAPE ALERT
+// A single keyword hit or page-change event detected by the RegDocScraper.
+// One ScrapeSubscription can produce many ScrapeAlerts over time.
+// ---------------------------------------------------------------------------
+model ScrapeAlert {
+  id             String   @id @default(cuid())
+  subscriptionId String
+  /// SHA-256 hash of the page content at the time of this scrape.
+  /// Compare with the previous hash to detect changes.
+  contentHash    String
+  /// Keywords that were matched in this scrape. JSON array of strings.
+  matchedKeywords String
+  /// Short excerpt of the page text surrounding the first matched keyword.
+  excerpt        String?
+  /// True if this alert has been dispatched via the NOTIFY queue.
+  notified       Boolean  @default(false)
+  detectedAt     DateTime @default(now())
+
+  subscription ScrapeSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([detectedAt])
+  @@map("scrape_alerts")
 }

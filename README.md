@@ -930,11 +930,13 @@ npx email dev --dir src/emails
 | `worker/src/workers/email.worker.ts` | Transactional email worker — 5 retries, exponential backoff, DLQ copy on exhaustion |
 | `worker/src/workers/notification.worker.ts` | Multi-channel alert worker — delegates to notification dispatcher, own DLQ |
 | `worker/src/workers/stamped-pdf.worker.ts` | Timestamped PDF worker — renders via stamper adapter, finalises DocumentReceipt |
+| `worker/src/workers/reg-scraper.worker.ts` | RegDocScraper worker — SCRAPE_ONE on-demand + SCRAPE_ALL repeatable cron (every 6h) |
 | `worker/src/workers/stripe-webhook.worker.ts` | Stripe event processor — handles 4 lifecycle events |
 | `worker/src/adapters/playwright.ts` | Pluggable headless Chromium adapter — `generatePdf()`, `takeScreenshot()`, `withPage()` |
 | `worker/src/adapters/stamper.ts` | DocStamper — renders HTML strings to PDFs, injects audit footer, computes SHA-256 |
 | `worker/src/adapters/email.ts` | Email channel adapter — Nodemailer transport singleton, shared by both email workers |
 | `worker/src/adapters/sms.ts` | SMS channel adapter — Vonage REST API via `fetch`, no SDK |
+| `worker/src/adapters/scraper.ts` | RegDocScraper — native fetch + cheerio, SHA-256 change detection, 1 req/sec per domain |
 | `worker/src/adapters/notification.ts` | Channel dispatcher — routes NOTIFY jobs to the correct adapter, exhaustiveness-checked |
 | `worker/src/queues.ts` | Canonical queue name registry (worker side — must mirror `src/lib/queue.ts`) |
 | `deploy/nginx/foundry.conf.template` | Nginx config template — copy, replace `{{APP_DOMAIN}}` + `{{APP_PORT}}`, enable via symlink |
